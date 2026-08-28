@@ -1,6 +1,6 @@
 yfinance
 ccxt
 pandas
-pandas-ta
+numpy
 aiohttp
 nest_asyncio
