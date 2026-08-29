@@ -7,7 +7,7 @@ import nest_asyncio
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timezone
 from aiohttp import web
 
 nest_asyncio.apply()
@@ -787,7 +787,8 @@ async def scan_live_pair(name, yf_ticker, tf_base, tf_htf, winrate):
         # กำหนดอายุแท่งสูงสุดที่ยอมรับได้ (ไม่เกิน 2-3 แท่งย้อนหลัง)
         max_age_map = {'5m': 25 * 60, '15m': 60 * 60, '1h': 3 * 3600}
         max_allowed_age = max_age_map.get(tf_base, 3 * 3600)
-        bar_age_seconds = (datetime.utcnow() - last_bar_time.to_pydatetime()).total_seconds()
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        bar_age_seconds = (now_utc - last_bar_time.to_pydatetime()).total_seconds()
 
         if bar_age_seconds > max_allowed_age:
             # แท่งเก่าเกินไป (ตลาดปิด เช่น Forex/ทองคำช่วงเสาร์-อาทิตย์ หรือบอทเพิ่ง Start)
