@@ -60,7 +60,7 @@ YF_SYMBOLS_MAP = {
 }
 
 TF_CONFIGS = [
-    ('5m',  '15m', '60d',  '60d'),
+    ('5m',  '15m', '30d',  '30d'),
     ('15m', '1h',  '60d',  '1y'),
     ('1h',  '1d',  '730d', '2y')
 ]
@@ -71,7 +71,7 @@ alerted_tracker = {}
 active_trades   = []
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  HELPER INDICATORS (PURE PANDAS / NUMPY)
+#  HELPER INDICATORS
 # ═════════════════════════════════════════════════════════════════════════════
 def calc_ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
@@ -431,26 +431,28 @@ async def scan_live_pair(name, yf_ticker, tf_base, tf_htf):
         pass
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  HTTP HEALTH CHECK (FOR RENDER WEB SERVICE)
+#  HTTP HEALTH CHECK (FOR RENDER WEB SERVICE INSTANT BINDING)
 # ═════════════════════════════════════════════════════════════════════════════
 async def health_check(request):
-    return web.Response(text="🚀 Storm A+ Scanner Bot is Active & Running 24/7!")
+    return web.Response(text="🚀 Storm A+ Scanner Bot is Active & Running 24/7 on Render!\nStatus: Online\nTime: " + str(datetime.now()))
 
 async def start_web_server():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     app = web.Application()
     app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Web Server listening on port {port} (Render Health Check OK)")
+    print(f"🌐 [PORT BINDING OK] Web Server listening on port {port}")
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  MAIN PIPELINE
+#  ASYNC SCANNER WORKER
 # ═════════════════════════════════════════════════════════════════════════════
-async def scanner_loop():
-    print(f"🚀 [PHASE 1] เริ่มต้น Backtest ทั้งหมด 29 คู่ × 3 Timeframes (5m, 15m, 1h) รวม 87 แบบจำลอง...\n")
+async def scanner_worker():
+    await asyncio.sleep(2)
+    print(f"🚀 [PHASE 1] เริ่มต้น Backtest ทั้งหมด 29 คู่ × 3 Timeframes (5m, 15m, 1h)...\n")
 
     results_table = []
     qualified_list = []
@@ -498,11 +500,12 @@ async def scanner_loop():
                 
                 if passed:
                     qualified_list.append((name, yf_ticker, tf_base, tf_htf, stats['wr1'], stats['total'], stats['win1'], stats['loss']))
+                
+                await asyncio.sleep(0.3)
                     
             except Exception as e:
                 print(f"Error: {e}")
 
-    # แสดงผลตารางจัดอันดับ
     if results_table:
         df_res = pd.DataFrame(results_table).sort_values(by='WinRate_TP1', ascending=False)
         print("\n" + "="*80)
@@ -518,7 +521,6 @@ async def scanner_loop():
         print(f"   ⭐ {name:<18} [{tf:>3}] -> WR: {wr:.1f}% ({tot} ไม้ | W:{w} L:{l})")
     print("="*80)
 
-    # ส่งสรุปเข้า Telegram
     tg_report = f"📊 *[STORM A+ MULTI-TIMEFRAME REPORT]*\n"
     tg_report += f"🎯 *เกณฑ์คัดเลือก:* Win Rate >= {WINRATE_THRESHOLD}%\n"
     tg_report += f"⏱ *Timeframes ทดสอบ:* `5m, 15m, 1h`\n\n"
@@ -551,10 +553,8 @@ async def scanner_loop():
         await asyncio.sleep(30)
 
 async def main():
-    await asyncio.gather(
-        start_web_server(),
-        scanner_loop()
-    )
+    await start_web_server()
+    await scanner_worker()
 
 if __name__ == '__main__':
     asyncio.run(main())
