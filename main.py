@@ -1,5 +1,7 @@
 import os
 import csv
+import json
+import urllib.request
 import aiohttp
 import asyncio
 import nest_asyncio
@@ -9,7 +11,6 @@ import yfinance as yf
 from datetime import datetime
 from aiohttp import web
 
-sys_stdout = True
 nest_asyncio.apply()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -19,7 +20,7 @@ TELEGRAM_BOT_TOKEN = "8907507767:AAEv4LMGq7vB9Zm76jaLbw3Iy5T66wJxtKw"
 TELEGRAM_CHAT_ID   = "5861943388"
 LOG_FILE_PATH      = "storm_trade_logs.csv"
 
-# ลิสต์ 33 รายการเกรด A+ ที่ผ่านการคัดเลือก (Win Rate >= 55%)
+# ลิสต์ 33 รายการเกรด A+ ที่ผ่านเกณฑ์ Win Rate >= 55%
 A_PLUS_WATCHLIST = [
     # Metals & Crypto
     ('XAU/USD (Gold)', 'GC=F', '5m', '15m', 61.3),
@@ -121,14 +122,21 @@ def log_event(text):
     if len(live_logs_stream) > 100:
         live_logs_stream.pop(0)
 
-async def send_telegram(message):
+# ═════════════════════════════════════════════════════════════════════════════
+#  ROBUST TELEGRAM SENDER (THREAD-SAFE / ZERO TIMEOUT ERRORS)
+# ═════════════════════════════════════════════════════════════════════════════
+def send_telegram_sync(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    async with aiohttp.ClientSession() as session:
-        try:
-            await session.post(url, json=payload)
-        except Exception as e:
-            log_event(f"Telegram error: {e}")
+    payload = json.dumps({"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}).encode('utf-8')
+    req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            pass
+    except Exception as e:
+        log_event(f"Telegram error: {e}")
+
+async def send_telegram(message):
+    await asyncio.to_thread(send_telegram_sync, message)
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  LIVE SCANNER & TRADE TRACKER
@@ -248,7 +256,7 @@ async def scan_live_pair(name, yf_ticker, tf_base, tf_htf, winrate):
                 f"⏰ *Bar Time:* `{last_time}`\n"
                 f"💾 *Saved to Logs:* ✅ `storm_trade_logs.csv`"
             )
-            log_event(f"🚨 Alert: {name} [{tf_base}] ({side}) | ID: {trade_id}")
+            log_event(f"🚨 Alert Sent: {name} [{tf_base}] ({side}) | ID: {trade_id}")
             await send_telegram(msg)
             
     except Exception as e:
@@ -355,7 +363,6 @@ async def scanner_worker():
     await asyncio.sleep(2)
     log_event(f"🚀 เริ่มต้นสแกน 33 รายการเกรด A+ แบบ Real-Time ทันที (วนตรวจทุก 30 วิ)...")
 
-    # ส่งสรุปยืนยันการเปิดระบบเข้า Telegram
     summary_msg = f"🏆 *[STORM A+ LIVE SCANNER STARTED]* 🏆\nระบบเริ่มสแกนสด 33 รายการเกรด A+ (Win Rate >= 55%) ตลอด 24 ชม. แล้วครับ!\n\n"
     summary_msg += f"• *ทองคำ & เงิน:* `XAU/USD`, `XAG/USD` (5m, 15m)\n"
     summary_msg += f"• *Crypto:* `BTC/USD`, `ETH/USD` (5m, 15m, 1h)\n"
