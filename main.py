@@ -1,3 +1,4 @@
+import sys
 import os
 import csv
 import aiohttp
@@ -9,6 +10,8 @@ import yfinance as yf
 from datetime import datetime
 from aiohttp import web
 
+# บังคับให้ Python พ่น Log ออกหน้าจอ Render ทันทีแบบ Real-time
+sys.stdout.reconfigure(line_buffering=True)
 nest_asyncio.apply()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -19,13 +22,10 @@ TELEGRAM_CHAT_ID   = "5861943388"
 LOG_FILE_PATH      = "storm_trade_logs.csv"
 
 YF_SYMBOLS_MAP = {
-    # Metals & Crypto
     'XAU/USD (Gold)': 'GC=F',
     'XAG/USD (Silver)': 'SI=F',
     'BTC/USD': 'BTC-USD',
     'ETH/USD': 'ETH-USD',
-    
-    # Forex Majors
     'EUR/USD': 'EURUSD=X',
     'GBP/USD': 'GBPUSD=X',
     'USD/JPY': 'USDJPY=X',
@@ -33,16 +33,12 @@ YF_SYMBOLS_MAP = {
     'USD/CAD': 'USDCAD=X',
     'AUD/USD': 'AUDUSD=X',
     'NZD/USD': 'NZDUSD=X',
-    
-    # Forex Crosses (JPY)
     'EUR/JPY': 'EURJPY=X',
     'GBP/JPY': 'GBPJPY=X',
     'AUD/JPY': 'AUDJPY=X',
     'CAD/JPY': 'CADJPY=X',
     'CHF/JPY': 'CHFJPY=X',
     'NZD/JPY': 'NZDJPY=X',
-    
-    # Forex Crosses (EUR & GBP)
     'EUR/GBP': 'EURGBP=X',
     'EUR/AUD': 'EURAUD=X',
     'EUR/CAD': 'EURCAD=X',
@@ -52,8 +48,6 @@ YF_SYMBOLS_MAP = {
     'GBP/CAD': 'GBPCAD=X',
     'GBP/CHF': 'GBPCHF=X',
     'GBP/NZD': 'GBPNZD=X',
-    
-    # Forex Crosses (AUD)
     'AUD/CAD': 'AUDCAD=X',
     'AUD/CHF': 'AUDCHF=X',
     'AUD/NZD': 'AUDNZD=X',
@@ -69,6 +63,9 @@ WINRATE_THRESHOLD = 55.0
 
 alerted_tracker = {}
 active_trades   = []
+live_logs_stream = []
+qualified_list  = []
+system_status = "กำลังเริ่มขั้นตอน Backtest..."
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  HELPER INDICATORS
@@ -97,7 +94,7 @@ def calc_vwap(df):
     return (hlc3 * vol).cumsum() / vol.cumsum()
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CSV LOGGER
+#  CSV LOGGER & EVENT LOGGING
 # ═════════════════════════════════════════════════════════════════════════════
 CSV_FIELDS = ['trade_id', 'timestamp', 'pair', 'tf', 'side', 'setup', 'entry', 'sl', 'tp1', 'tp2', 'status', 'pnl_r', 'close_time']
 
@@ -126,6 +123,14 @@ def update_csv_trade_status(trade_id, status, pnl_r, close_time):
 
 init_csv()
 
+def log_event(text):
+    now = datetime.now().strftime('%H:%M:%S')
+    entry = f"[{now}] {text}"
+    print(entry, flush=True)
+    live_logs_stream.append(entry)
+    if len(live_logs_stream) > 100:
+        live_logs_stream.pop(0)
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  TELEGRAM SENDER
 # ═════════════════════════════════════════════════════════════════════════════
@@ -136,7 +141,7 @@ async def send_telegram(message):
         try:
             await session.post(url, json=payload)
         except Exception as e:
-            print(f"Telegram error: {e}")
+            log_event(f"Telegram error: {e}")
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  BACKTEST ENGINE
@@ -327,14 +332,14 @@ async def check_active_trade_outcomes(data_b):
             t['status'] = 'CLOSED_TP2'
             update_csv_trade_status(t['trade_id'], 'CLOSED_TP2', 2.0, now_str)
             msg = f"🚀 *[TP2 HIT - FULL WIN]* 🚀\n\n📌 `{t['pair']}` *[{t['tf']}]* ({t['side']})\n🎯 ราคาชน TP2 สำเร็จ (+2.0R) ✅"
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 {t['pair']} [{t['tf']}] Hit TP2 (+2.0R)")
+            log_event(f"🚀 {t['pair']} [{t['tf']}] Hit TP2 (+2.0R)")
             await send_telegram(msg)
 
         elif hit_tp1 and t['status'] == 'OPEN':
             t['status'] = 'HIT_TP1'
             update_csv_trade_status(t['trade_id'], 'HIT_TP1', 0.8, now_str)
             msg = f"🎯 *[TP1 HIT]* 🎯\n\n📌 `{t['pair']}` *[{t['tf']}]* ({t['side']})\n✨ ชนเป้า TP1 สำเร็จ (+0.8R)"
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎯 {t['pair']} [{t['tf']}] Hit TP1 (+0.8R)")
+            log_event(f"🎯 {t['pair']} [{t['tf']}] Hit TP1 (+0.8R)")
             await send_telegram(msg)
             still_active.append(t)
 
@@ -343,7 +348,7 @@ async def check_active_trade_outcomes(data_b):
             pnl = 0.8 if t['status'] == 'HIT_TP1' else -1.0
             update_csv_trade_status(t['trade_id'], final_status, pnl, now_str)
             msg = f"🛑 *[STOP LOSS TRIGGERED]*\n\n📌 `{t['pair']}` *[{t['tf']}]* ({t['side']})\nราคาโดนจุด SL | สถานะ: `{final_status}`"
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 {t['pair']} [{t['tf']}] Hit SL")
+            log_event(f"🛑 {t['pair']} [{t['tf']}] Hit SL")
             await send_telegram(msg)
 
         else:
@@ -421,38 +426,118 @@ async def scan_live_pair(name, yf_ticker, tf_base, tf_htf):
                 f"🛑 *Stop Loss:* `{sl:.5f}`\n"
                 f"🎯 *TP1 (0.8R):* `{tp1:.5f}`\n"
                 f"🚀 *TP2 (2.0R):* `{tp2:.5f}`\n"
-                f"⏰ *Bar Time:* `{last_time}`\n"
-                f"💾 *Saved to Logs:* ✅ `storm_trade_logs.csv`"
+                f"⏰ *Bar Time:* `{last_time}`"
             )
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚨 Alert Sent: {name} [{tf_base}] ({side})")
+            log_event(f"🚨 Alert Sent: {name} [{tf_base}] ({side}) | ID: {trade_id}")
             await send_telegram(msg)
             
     except Exception as e:
         pass
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  HTTP HEALTH CHECK (FOR RENDER WEB SERVICE INSTANT BINDING)
+#  DASHBOARD WEB PAGE (AUTO-REFRESHING UI)
 # ═════════════════════════════════════════════════════════════════════════════
-async def health_check(request):
-    return web.Response(text="🚀 Storm A+ Scanner Bot is Active & Running 24/7 on Render!\nStatus: Online\nTime: " + str(datetime.now()))
+async def handle_dashboard(request):
+    global system_status
+    rows_html = ""
+    if os.path.exists(LOG_FILE_PATH):
+        try:
+            df_logs = pd.read_csv(LOG_FILE_PATH)
+            for _, r in df_logs.tail(15).iloc[::-1].iterrows():
+                badge_col = "#10b981" if r['side'] == 'BUY' else "#ef4444"
+                rows_html += f"""<tr>
+                    <td>{r['timestamp']}</td>
+                    <td><b>{r['pair']}</b></td>
+                    <td>{r['tf']}</td>
+                    <td style="color:{badge_col}; font-weight:bold;">{r['side']}</td>
+                    <td>{r['entry']}</td>
+                    <td>{r['sl']}</td>
+                    <td>{r['tp1']}</td>
+                    <td><span style="background:#334155; padding:2px 8px; border-radius:4px;">{r['status']}</span></td>
+                </tr>"""
+        except Exception:
+            pass
+
+    logs_text = "\n".join(live_logs_stream[-20:])
+
+    html_content = f"""<!DOCTYPE html>
+    <html lang="th">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="refresh" content="5">
+        <title>⚡ Storm A+ Live Dashboard</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f1f5f9; margin: 0; padding: 20px; }}
+            .container {{ max-width: 1100px; margin: 0 auto; }}
+            .header {{ display: flex; justify-content: space-between; align-items: center; background: #1e293b; padding: 20px 25px; border-radius: 12px; border: 1px solid #334155; margin-bottom: 20px; }}
+            .title {{ font-size: 22px; font-weight: bold; color: #38bdf8; display: flex; align-items: center; gap: 10px; }}
+            .badge-live {{ background: #10b981; color: white; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: bold; animation: pulse 2s infinite; }}
+            .card {{ background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; margin-bottom: 20px; }}
+            .card-title {{ font-size: 17px; font-weight: bold; margin-bottom: 12px; color: #94a3b8; display: flex; align-items: center; gap: 8px; }}
+            table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }}
+            th {{ background: #0f172a; padding: 12px; color: #94a3b8; font-weight: 600; border-bottom: 2px solid #334155; }}
+            td {{ padding: 12px; border-bottom: 1px solid #334155; }}
+            .log-terminal {{ background: #000; color: #22c55e; font-family: 'Courier New', monospace; font-size: 13px; padding: 15px; border-radius: 8px; height: 180px; overflow-y: auto; white-space: pre-wrap; line-height: 1.4; }}
+            @keyframes pulse {{ 0% {{ opacity: 1; }} 50% {{ opacity: 0.5; }} 100% {{ opacity: 1; }} }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div class="title">⚡ Storm A+ Live Scanner</div>
+                <div><span class="badge-live">● RUNNING 24/7</span></div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">📡 สถานะการทำงานปัจจุบัน: <span style="color:#f8fafc;">{system_status}</span></div>
+                <div class="log-terminal">{logs_text if logs_text else 'กำลังเริ่มระบบ...'}</div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">📝 รายการออเดอร์ล่าสุด (Trade Logs)</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>เวลา</th>
+                            <th>คู่เงิน</th>
+                            <th>TF</th>
+                            <th>Side</th>
+                            <th>Entry</th>
+                            <th>SL</th>
+                            <th>TP1</th>
+                            <th>สถานะ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html if rows_html else '<tr><td colspan="8" style="text-align:center; color:#64748b;">ยังไม่มีประวัติการส่งสัญญาณ</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </body>
+    </html>"""
+    return web.Response(text=html_content, content_type="text/html")
 
 async def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     app = web.Application()
-    app.router.add_get("/", health_check)
-    app.router.add_get("/health", health_check)
+    app.router.add_get("/", handle_dashboard)
+    app.router.add_get("/health", lambda r: web.Response(text="OK"))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 [PORT BINDING OK] Web Server listening on port {port}")
+    log_event(f"Web Server listening on port {port} (Dashboard ready)")
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  ASYNC SCANNER WORKER
+#  ASYNC WORKER
 # ═════════════════════════════════════════════════════════════════════════════
 async def scanner_worker():
+    global system_status, qualified_list
     await asyncio.sleep(2)
-    print(f"🚀 [PHASE 1] เริ่มต้น Backtest ทั้งหมด 29 คู่ × 3 Timeframes (5m, 15m, 1h)...\n")
+    log_event(f"🚀 [PHASE 1] เริ่มต้น Backtest 29 คู่ × 3 Timeframes (87 แบบจำลอง)...")
+    system_status = "กำลังทำการ Backtest คัดกรองคู่เงิน (87 รูปแบบ)..."
 
     results_table = []
     qualified_list = []
@@ -463,7 +548,6 @@ async def scanner_worker():
         for tf_base, tf_htf, p_base, p_htf in TF_CONFIGS:
             current_idx += 1
             try:
-                print(f"[{current_idx:>2}/{total_count}] {name:<18} [{tf_base:>3}] ...", end=" ")
                 data_b = yf.download(yf_ticker, period=p_base, interval=tf_base, progress=False)
                 data_h = yf.download(yf_ticker, period=p_htf,  interval=tf_htf,  progress=False)
                 
@@ -483,12 +567,10 @@ async def scanner_worker():
                 stats = run_backtest_simulation(data_b, data_h)
                 passed = (stats['wr1'] >= WINRATE_THRESHOLD) and (stats['total'] >= 3)
                 
-                status_str = "✅ ผ่าน" if passed else "❌ ไม่ผ่าน"
-                print(f"WR(TP1): {stats['wr1']:>5.1f}% | Trades: {stats['total']:>2} -> {status_str}")
+                log_event(f"[{current_idx}/{total_count}] {name:<16} [{tf_base}] -> WR: {stats['wr1']:.1f}% ({'✅ ผ่าน' if passed else '❌'})")
                 
                 results_table.append({
                     'Pair': name,
-                    'Ticker': yf_ticker,
                     'TF': tf_base,
                     'HTF': tf_htf,
                     'Total': stats['total'],
@@ -501,26 +583,15 @@ async def scanner_worker():
                 if passed:
                     qualified_list.append((name, yf_ticker, tf_base, tf_htf, stats['wr1'], stats['total'], stats['win1'], stats['loss']))
                 
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
                     
             except Exception as e:
-                print(f"Error: {e}")
+                log_event(f"Error {name} [{tf_base}]: {e}")
 
-    if results_table:
-        df_res = pd.DataFrame(results_table).sort_values(by='WinRate_TP1', ascending=False)
-        print("\n" + "="*80)
-        print(f"📊 ตารางอันดับ WINRATE สูงสุด (รวมทุกคู่เงินและทุก Timeframe)")
-        print("="*80)
-        for idx, r in df_res.iterrows():
-            badge = "⭐ [ผ่านเกณฑ์]" if r['Passed'] else "   [ไม่ผ่าน] "
-            print(f"{badge} {r['Pair']:<18} ({r['TF']:>3}) | WR (TP1): {r['WinRate_TP1']:>5.1f}% | Trades: {r['Total']:>2} (W: {r['Wins']}, L: {r['Losses']})")
+    log_event(f"🏆 คัดเลือกคู่ผ่านเกณฑ์ได้ทั้งหมด {len(qualified_list)} รายการ")
+    system_status = f"สแกน Real-Time คู่ที่ผ่านเกณฑ์ ({len(qualified_list)} รายการ)"
 
-    print("\n" + "="*80)
-    print(f"🏆 รายการที่ผ่านเกณฑ์ Win Rate >= {WINRATE_THRESHOLD}% มีทั้งหมด {len(qualified_list)} รายการ:")
-    for name, _, tf, _, wr, tot, w, l in qualified_list:
-        print(f"   ⭐ {name:<18} [{tf:>3}] -> WR: {wr:.1f}% ({tot} ไม้ | W:{w} L:{l})")
-    print("="*80)
-
+    # ส่งสรุปเข้า Telegram
     tg_report = f"📊 *[STORM A+ MULTI-TIMEFRAME REPORT]*\n"
     tg_report += f"🎯 *เกณฑ์คัดเลือก:* Win Rate >= {WINRATE_THRESHOLD}%\n"
     tg_report += f"⏱ *Timeframes ทดสอบ:* `5m, 15m, 1h`\n\n"
@@ -536,14 +607,13 @@ async def scanner_worker():
     tg_report += f"\n📁 *Trade Logger:* บันทึกไม้ลง `storm_trade_logs.csv` อัตโนมัติ"
     tg_report += f"\n⏰ *รายงาน ณ เวลา:* `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
     
-    print("\n📨 กำลังส่งรายงานสรุปเข้า Telegram...")
     await send_telegram(tg_report)
 
     if not qualified_list:
-        print("\n⚠️ ไม่มีคู่ที่ผ่านเกณฑ์ จึงไม่เริ่มระบบ Live Scanner")
+        log_event("⚠️ ไม่มีคู่ที่ผ่านเกณฑ์")
         return
 
-    print("\n🚀 [PHASE 2] เริ่มระบบสแกนและติดตามผลออเดอร์แบบ Real-Time อัตโนมัติ (วนตรวจทุก 30 วิ)...")
+    log_event("🚀 [PHASE 2] เริ่มระบบ Live Scanner ตรวจสอบทุก 30 วินาที...")
     while True:
         tasks = []
         for name, yf_ticker, tf_base, tf_htf, _, _, _, _ in qualified_list:
