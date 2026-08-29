@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.env
+storm_trade_logs.csv
