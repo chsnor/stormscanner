@@ -778,9 +778,22 @@ async def scan_live_pair(name, yf_ticker, tf_base, tf_htf, winrate):
         if result.get('signal') is None:
             return
 
-        last_time = str(confirmed.index[-1])
+        last_bar_time = pd.Timestamp(confirmed.index[-1])
+        last_time = str(last_bar_time)
         if alerted_tracker.get(tracker_key) == last_time:
             return  # ส่งสัญญาณ bar นี้ไปแล้ว
+
+        # ─── FRESHNESS GUARD: ป้องกันการแจ้งเตือนแท่งเก่าย้อนหลัง (เช่น วันหยุด/ตลาดปิด) ───
+        # กำหนดอายุแท่งสูงสุดที่ยอมรับได้ (ไม่เกิน 2-3 แท่งย้อนหลัง)
+        max_age_map = {'5m': 25 * 60, '15m': 60 * 60, '1h': 3 * 3600}
+        max_allowed_age = max_age_map.get(tf_base, 3 * 3600)
+        bar_age_seconds = (datetime.utcnow() - last_bar_time.to_pydatetime()).total_seconds()
+
+        if bar_age_seconds > max_allowed_age:
+            # แท่งเก่าเกินไป (ตลาดปิด เช่น Forex/ทองคำช่วงเสาร์-อาทิตย์ หรือบอทเพิ่ง Start)
+            # บันทึกว่ารับทราบแล้ว แต่ไม่ส่ง Alert และไม่เปิดออเดอร์ใหม่
+            alerted_tracker[tracker_key] = last_time
+            return
 
         alerted_tracker[tracker_key] = last_time
         side  = result['signal']
