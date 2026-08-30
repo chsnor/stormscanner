@@ -749,8 +749,8 @@ async def scan_live_pair(name, yf_ticker, tf_base, tf_htf, winrate):
         bp = BASE_PERIOD.get(tf_base, '7d')
         hp = HTF_PERIOD.get(tf_htf, '60d')
 
-        data_b = yf.download(yf_ticker, period=bp, interval=tf_base, progress=False)
-        data_h = yf.download(yf_ticker, period=hp, interval=tf_htf, progress=False)
+        data_b = await asyncio.to_thread(yf.download, yf_ticker, period=bp, interval=tf_base, progress=False)
+        data_h = await asyncio.to_thread(yf.download, yf_ticker, period=hp, interval=tf_htf, progress=False)
 
         # Clean MultiIndex columns (yfinance v0.2+)
         for d in (data_b, data_h):
