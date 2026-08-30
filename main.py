@@ -171,7 +171,8 @@ def calc_vwap(df):
 
 
 def calc_pivot_high(series, left, right):
-    """Pivot High — ตรงกับ Pine ta.pivothigh(high, 5, 5)"""
+    """Pivot High — ตรงกับ Pine ta.pivothigh(high, 5, 5)
+    assign ค่าที่ pivot_idx (แท่ง pivot จริง) เมื่อ right bars ยืนยันแล้ว"""
     result = pd.Series(np.nan, index=series.index)
     for i in range(left + right, len(series)):
         pivot_idx = i - right
@@ -179,12 +180,13 @@ def calc_pivot_high(series, left, right):
         lw = series.iloc[pivot_idx - left:pivot_idx]
         rw = series.iloc[pivot_idx + 1:i + 1]
         if len(lw) >= left and len(rw) >= right and (pv >= lw).all() and (pv >= rw).all():
-            result.iloc[i] = pv
+            result.iloc[pivot_idx] = pv  # FIX: assign ที่แท่ง pivot จริง ไม่ใช่ bar สุดท้าย
     return result
 
 
 def calc_pivot_low(series, left, right):
-    """Pivot Low — ตรงกับ Pine ta.pivotlow(low, 5, 5)"""
+    """Pivot Low — ตรงกับ Pine ta.pivotlow(low, 5, 5)
+    assign ค่าที่ pivot_idx (แท่ง pivot จริง) เมื่อ right bars ยืนยันแล้ว"""
     result = pd.Series(np.nan, index=series.index)
     for i in range(left + right, len(series)):
         pivot_idx = i - right
@@ -192,7 +194,7 @@ def calc_pivot_low(series, left, right):
         lw = series.iloc[pivot_idx - left:pivot_idx]
         rw = series.iloc[pivot_idx + 1:i + 1]
         if len(lw) >= left and len(rw) >= right and (pv <= lw).all() and (pv <= rw).all():
-            result.iloc[i] = pv
+            result.iloc[pivot_idx] = pv  # FIX: assign ที่แท่ง pivot จริง ไม่ใช่ bar สุดท้าย
     return result
 
 
@@ -226,12 +228,12 @@ def log_trade_to_csv(trade_dict):
 def update_csv_trade_status(trade_id, status, pnl_r, close_time):
     if not os.path.exists(LOG_FILE_PATH):
         return
-    df = pd.read_csv(LOG_FILE_PATH)
-    mask = df['trade_id'] == trade_id
+    df = pd.read_csv(LOG_FILE_PATH, dtype=str)
+    mask = df['trade_id'] == str(trade_id)
     if mask.any():
-        df.loc[mask, 'status'] = status
-        df.loc[mask, 'pnl_r'] = pnl_r
-        df.loc[mask, 'close_time'] = close_time
+        df.loc[mask, 'status'] = str(status)
+        df.loc[mask, 'pnl_r'] = str(pnl_r)
+        df.loc[mask, 'close_time'] = str(close_time)
         df.to_csv(LOG_FILE_PATH, index=False)
 
 init_csv()
@@ -558,9 +560,9 @@ def compute_storm_signals(data_b, data_h):
 
         # ── Setup 4: Liquidity Sweep ──
         sSweepL = sSweepS = False
-        if i >= 21:
-            swLo = np.min(low[i - 20:i])    # ta.lowest(low,20)[1]
-            swHi = np.max(high[i - 20:i])   # ta.highest(high,20)[1]
+        if i >= 22:
+            swLo = np.min(low[i - 21:i - 1])    # FIX: ta.lowest(low,20)[1] = bars [i-21, i-2]
+            swHi = np.max(high[i - 21:i - 1])   # FIX: ta.highest(high,20)[1] = bars [i-21, i-2]
             sSweepL = low[i] < swLo and close[i] > swLo and close[i] > open_[i]
             sSweepS = high[i] > swHi and close[i] < swHi and close[i] < open_[i]
 
@@ -668,7 +670,8 @@ async def check_active_trade_outcomes(confirmed, pair_name, tf_base):
             if closed:
                 break
             h, l, o, c = bar['high'], bar['low'], bar['open'], bar['close']
-            elapsed = already_checked + bar_count + 1
+            # FIX: elapsed เริ่มจาก 0 เพื่อให้ timeout ตรง MAX_BARS พอดี
+            elapsed = already_checked + bar_count
 
             hit_stop = (l <= t['sl'])  if direction == 1 else (h >= t['sl'])
             hit_tp1  = (h >= t['tp1']) if direction == 1 else (l <= t['tp1'])
@@ -821,24 +824,16 @@ async def scan_live_pair(name, yf_ticker, tf_base, tf_htf, winrate):
         log_trade_to_csv(new_trade)
         active_trades.append(new_trade)
 
+        setups_str = ', '.join(result['setups']) or 'Storm A+'
         msg = (
-            f"⚡ *[STORM A+ {side} SIGNAL]* ⚡\n\n"
-            f"📊 *Asset:* `{name}` *(TF: {tf_base})*\n"
-            f"🔥 *Setups:* {', '.join(result['setups'])}\n"
-            f"🌪️ *Regime:* {result['regime']} | *Vol%:* {result['vol_pct']}\n"
-            f"📈 *HTF:* {result['htf_trend']} | *RSI:* {result['rsi']}\n"
-            f"🧠 *AI:* {'RSI ON' if result['prefer_on'] else 'RSI OFF'} "
-            f"(On:{result['wr_on']}%/{result['trades_on']}t "
-            f"Off:{result['wr_off']}%/{result['trades_off']}t)\n"
-            f"⭐ *Historical WR:* `{winrate:.1f}%`\n"
-            f"🎯 *Direction:* {emoji} *{side}*\n"
-            f"🆔 *ID:* `{trade_id}`\n\n"
+            f"{emoji} *{side} SIGNAL — {name} ({tf_base})*\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📌 *Setup:* `{setups_str}`\n"
+            f"⭐ *WinRate:* `{winrate:.1f}%` | *HTF:* `{result['htf_trend']}`\n\n"
             f"💵 *Entry:* `{c:.5f}`\n"
             f"🛑 *SL:* `{sl:.5f}`\n"
-            f"🎯 *TP1 ({R1}R):* `{tp1:.5f}`\n"
-            f"🚀 *TP2 ({R2}R):* `{tp2:.5f}`\n"
-            f"⏰ *Bar:* `{last_time}`\n"
-            f"💾 *Logged:* ✅ `{LOG_FILE_PATH}`"
+            f"🎯 *TP1:* `{tp1:.5f}` *(+{R1}R)*\n"
+            f"🚀 *TP2:* `{tp2:.5f}` *(+{R2}R)*"
         )
         log_event(f"🚨 {name} [{tf_base}] {side} | {result['setups']} | "
                   f"Regime:{result['regime']} Vol%:{result['vol_pct']} "
@@ -965,14 +960,10 @@ async def scanner_worker():
               f"(Full Pine Logic: YZ-Vol + Regime + HTF + 5 Setups + AI Optimizer)")
 
     summary_msg = (
-        f"🏆 *[STORM A+ LIVE SCANNER STARTED]* 🏆\n"
-        f"ระบบ Full Pine Logic Edition เริ่มทำงานแล้ว!\n\n"
-        f"🌪️ *Engine:* Yang-Zhang Vol → Regime → HTF Trend → "
-        f"5 Setups → Virtual Tracker → AI Optimizer\n"
-        f"📊 *Pairs:* {len(A_PLUS_WATCHLIST)} A+ (WR >= 55%)\n"
-        f"⚙️ *Config:* Storm%={STORM_PCT} StopATR={STOP_ATR} "
-        f"TP1={R1}R TP2={R2}R Timeout={MAX_BARS}bars\n\n"
-        f"🌐 *Dashboard:* https://stormscanner.onrender.com"
+        f"🚀 *[STORM A+ SCANNER STARTED]*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📊 *Pairs:* `{len(A_PLUS_WATCHLIST)} A+ Pairs`\n"
+        f"🌐 *Dashboard:* https://stormscanner-1.onrender.com"
     )
     await send_telegram(summary_msg)
 
